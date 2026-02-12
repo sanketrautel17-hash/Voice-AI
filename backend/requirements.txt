@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+websockets
+# Ensure we get the twilio extras if they exist, otherwise rely on the main package
+pipecat-ai[deepgram,google,twilio]
+python-dotenv
+motor
+dotenv
