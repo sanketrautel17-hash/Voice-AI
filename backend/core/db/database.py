@@ -2,6 +2,10 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 from dotenv import load_dotenv
 
+from commons.logger import logger
+
+log = logger(__name__)
+
 load_dotenv()
 
 MONGODB_URL = os.getenv("MONGODB_URL")
@@ -19,16 +23,20 @@ async def connect_to_mongo():
         db.client = AsyncIOMotorClient(MONGODB_URL)
         # Verify connection
         await db.client.admin.command("ping")
-        print("Connected to MongoDB")
+        log.info("Connected to MongoDB")
     except Exception as e:
-        print(f"Error connecting to MongoDB: {e}")
+        log.error(f"Error connecting to MongoDB: {e}")
 
 
 async def close_mongo_connection():
-    if db.client:
-        db.client.close()
-        print("Closed MongoDB connection")
+    try:
+        if db.client:
+            db.client.close()
+            log.info("Closed MongoDB connection")
+    except Exception as e:
+        log.error(f"Error closing MongoDB connection: {e}")
 
 
 def get_database():
-    return db.client.get_default_database()
+    """Get the voice_project database instance."""
+    return db.client["voice_project"]

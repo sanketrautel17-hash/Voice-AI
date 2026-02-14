@@ -15,7 +15,7 @@
 **Steps:**
 1.  **Twilio Transport:** Configure the `TwilioWebsocketInputTransport` and `TwilioWebsocketOutputTransport` to handle audio streams from the phone call.
 2.  **Deepgram STT Service:** Set up Deepgram as the "ears" to transcribe user speech in real-time.
-3.  **Gemini LLM Service:** Configure Google Gemini as the "brain." We will create a `system_prompt` that defines the bot's persona (Bank Loan Officer) and its goal (assess loan interest).
+3.  **Groq LLM Service:** Configure Groq (Llama 3) as the "brain." We will create a `system_prompt` that defines the bot's persona (Bank Loan Officer) and its goal (assess loan interest).
 4.  **Deepgram TTS Service:** Set up Deepgram as the "mouth" to speak the LLM's responses back to the user.
 5.  **Pipeline Construction:** Write the code to link these services together: `Transport -> STT -> LLM -> TTS -> Transport`.
 
@@ -32,7 +32,7 @@
 
 **Steps:**
 1.  **Database Connection:** Set up `motor` (async MongoDB driver) to connect to your local MongoDB instance.
-2.  **Conversation Analysis:** Refine the Gemini system prompt to output a JSON structure at the end of the call (e.g., `{"interest_level": "High", "reason": "..."}`).
+2.  **Conversation Analysis:** Refine the Groq prompt to output a JSON structure at the end of the call (e.g., `{"interest_level": "High", "reason": "..."}`).
 3.  **Save Results:** Implement a step in the pipeline (or a post-call hook) to parse this analysis and save it to the `loan_interests` collection in MongoDB.
 
 ## Phase 5: Testing & Refinement

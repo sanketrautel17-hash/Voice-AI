@@ -6,7 +6,9 @@ from typing import Optional
 from fastapi import APIRouter, Request, Response, WebSocket, HTTPException
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse, Connect
-from loguru import logger
+from commons.logger import logger
+
+log = logger(__name__)
 from dotenv import load_dotenv
 
 from core.pipeline import bot
@@ -40,17 +42,18 @@ async def handle_dialout_request(request: DialoutRequest):
     # Use /ws endpoint as per the new structure
     stream_url = f"wss://{PUBLIC_URL.replace('https://', '').replace('http://', '')}/ws"
 
-    twiml_instruction = f"""
-<Response>
-    <Connect>
-        <Stream url="{stream_url}" />
-    </Connect>
-</Response>
-"""
+    # Construct TwiML using the helper library for safety and parameters
+    response = VoiceResponse()
+    connect = Connect()
+    stream = connect.stream(url=stream_url)
 
-    logger.info(
-        f"Initiating call to {to_number} with direct TwiML stream to {stream_url}"
-    )
+    # Pass metadata to the WebSocket (Useful for the Bot to know who it's talking to)
+    stream.parameter(name="to_number", value=to_number)
+    response.append(connect)
+
+    twiml_instruction = str(response)
+
+    log.info(f"Initiating call to {to_number} with direct TwiML stream to {stream_url}")
 
     try:
         call = twilio_client.calls.create(
@@ -60,7 +63,7 @@ async def handle_dialout_request(request: DialoutRequest):
             method="POST",
         )
     except Exception as e:
-        logger.error(f"Failed to initiate Twilio call: {e}")
+        log.error(f"Failed to initiate Twilio call: {e}")
         raise HTTPException(
             status_code=500, detail=f"Failed to initiate call: {str(e)}"
         )
@@ -95,31 +98,45 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     Handle WebSocket connection from Twilio Media Streams.
     """
-    await websocket.accept()
-    logger.info("WebSocket connection accepted for outbound call")
+    try:
+        await websocket.accept()
+        log.info("WebSocket connection accepted for outbound call")
 
-    # 1. Wait for the initial 'start' message from Twilio to get the Stream SID
-    start_message = None
+        # 1. Wait for the initial 'start' message from Twilio to get the Stream SID
+        start_message = None
 
-    while True:
-        data = await websocket.receive_text()
-        message = json.loads(data)
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
 
-        if message["event"] == "connected":
-            logger.info("Received connected event, waiting for start...")
-            continue
-        elif message["event"] == "start":
-            start_message = message
-            break
-        else:
-            logger.warning(f"Ignoring unexpected event: {message['event']}")
+            if message["event"] == "connected":
+                log.info("Received connected event, waiting for start...")
+                continue
+            elif message["event"] == "start":
+                start_message = message
+                # Log any custom parameters we passed in TwiML
+                custom_params = start_message["start"].get("customParameters", {})
+                log.info(f"Stream parameters received: {custom_params}")
+                break
+            else:
+                log.warning(f"Ignoring unexpected event: {message['event']}")
 
-    stream_sid = start_message["start"]["streamSid"]
-    call_sid = start_message["start"]["callSid"]
-    logger.info(f"Stream started with SID: {stream_sid} for Call SID: {call_sid}")
+        stream_sid = start_message["start"]["streamSid"]
+        call_sid = start_message["start"]["callSid"]
 
-    # 2. Hand off to the Bot logic
-    await bot(websocket, stream_sid, call_sid)
+        # Pass the custom params (like to_number) to the bot if needed later
+        # For now, just logging it is enough
+        to_number = start_message["start"].get("customParameters", {}).get("to_number")
+
+        log.info(
+            f"Stream started with SID: {stream_sid} for Call SID: {call_sid} (To: {to_number})"
+        )
+
+        # 2. Hand off to the Bot logic
+        await bot(websocket, stream_sid, call_sid)
+    except Exception as e:
+        log.error(f"Error in websocket_endpoint: {e}")
+        await websocket.close()
 
 
 # ... existing imports ...

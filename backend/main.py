@@ -3,6 +3,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from core.apis.routers import call_router
+from core.apis.routers import ingestion_router
+
+from commons.logger import logger
+
+log = logger(__name__)
 
 load_dotenv()
 
@@ -11,16 +16,24 @@ app = FastAPI()
 
 @app.on_event("startup")
 async def startup_db_client():
-    from core.db.database import connect_to_mongo
+    try:
+        from core.db.database import connect_to_mongo
 
-    await connect_to_mongo()
+        await connect_to_mongo()
+        log.info("Application startup complete")
+    except Exception as e:
+        log.error(f"Error during application startup: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    from core.db.database import close_mongo_connection
+    try:
+        from core.db.database import close_mongo_connection
 
-    await close_mongo_connection()
+        await close_mongo_connection()
+        log.info("Application shutdown complete")
+    except Exception as e:
+        log.error(f"Error during application shutdown: {e}")
 
 
 app.add_middleware(
@@ -38,6 +51,7 @@ async def read_root():
 
 
 app.include_router(call_router.router)
+app.include_router(ingestion_router.router)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,33 @@
+# Core API Framework
 fastapi
 uvicorn
 websockets
-# Ensure we get the twilio extras if they exist, otherwise rely on the main package
-pipecat-ai[deepgram,google,twilio]
 python-dotenv
+
+# Voice AI Pipeline
+pipecat-ai[deepgram,twilio]
+
+# Database (MongoDB for call storage only)
 motor
-dotenv
+
+# LLM & AI
+groq
+openai
+
+# LangChain Core
+langchain
+langchain-community
+
+# RAG System (Local)
+langchain-huggingface
+langchain-chroma
+chromadb
+sentence-transformers
+
+# Document Processing
+pypdf
+llama-parse
+
+# Web Search
+duckduckgo-search
+python-multipart
