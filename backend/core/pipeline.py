@@ -4,8 +4,16 @@ import asyncio
 from datetime import datetime
 import json
 from commons.logger import logger
+import logging
+
+# FORCE LOGGING TO STDERR FOR DEBUGGING
+logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
+from dotenv import load_dotenv
 
 log = logger(__name__)
+# Ensure env vars are loaded
+load_dotenv()
+
 from groq import AsyncGroq
 
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
@@ -15,6 +23,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
@@ -33,10 +42,8 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from core.db.database import get_database
 
-
 from core.rag.knowledge_base import kb
 from core.tools.web_search import web_searchER
-
 
 from pipecat.services.llm_service import FunctionCallParams
 
@@ -45,55 +52,6 @@ async def run_bot(transport, stream_sid, call_sid):
     # 1. Services
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
     tts = DeepgramTTSService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-
-    # Using Groq LLM Service with explicit tool configuration
-    from pipecat.services.openai.base_llm import BaseOpenAILLMService
-
-    # Define tools in OpenAI format
-    tool_schemas = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_loan_information",
-                "description": "Search the bank's internal knowledge base for loan policies, interest rates, and documents.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The search query (e.g., 'home loan interest rates').",
-                        }
-                    },
-                    "required": ["query"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_web",
-                "description": "Search the public web for current market rates, competitor info, or general financial news.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The search query (e.g., 'current prime rate').",
-                        }
-                    },
-                    "required": ["query"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "end_call",
-                "description": "End the conversation and disconnect the call. Use this when the user says goodbye or when the conversation has come to a natural conclusion.",
-                "parameters": {"type": "object", "properties": {}, "required": []},
-            },
-        },
-    ]
 
     llm = GroqLLMService(
         api_key=os.getenv("GROQ_API_KEY"),
@@ -121,7 +79,7 @@ async def run_bot(transport, stream_sid, call_sid):
    → YOU MUST IMMEDIATELY call end_call()
    → DO NOT just say goodbye
    → DO NOT continue conversation  
-   → CALL THE FUNCTION: end_call()
+   → END THE CALL INSTANTLY by calling end_call()
 
 1️⃣ When user asks about RATES/LOANS:
    → ALWAYS call get_loan_information(query="user question here")
@@ -249,15 +207,22 @@ Be brief (1-2 sentences). Be helpful. USE YOUR TOOLS!""",
         await log_tool_usage("search_web", query, result)
         return result
 
-    async def end_call(params: FunctionCallParams):
+    async def end_call(params: FunctionCallParams, **kwargs):
         """
         End the conversation and disconnect the call.
         Use this when the user says goodbye or when the conversation has come to a natural conclusion.
         """
+        print(
+            "DEBUG: end_call tool invoked! Queueing goodbye and hangup...",
+            file=sys.stderr,
+        )
         log.info("end_call tool invoked. Sending goodbye and hanging up...")
+        if kwargs:
+            log.info(f"end_call received unexpected kwargs: {kwargs}")
+
         await log_tool_usage("end_call", "N/A", "Call termination requested")
         try:
-            # Send a goodbye message before ending
+            # Send a goodbye message
             await task.queue_frames(
                 [
                     TextFrame(
@@ -265,14 +230,20 @@ Be brief (1-2 sentences). Be helpful. USE YOUR TOOLS!""",
                     ),
                 ]
             )
-            # Small delay to allow the goodbye message to be spoken
+
+            # Allow time for the goodbye message to be spoken.
             await asyncio.sleep(1.5)
-            # Now send the EndFrame to terminate
+
+            # Send EndFrame to trigger the serializer's auto_hang_up logic
             await task.queue_frames([EndFrame()])
-            log.info("EndFrame queued. Call should terminate.")
+            log.info(
+                "EndFrame queued. TwilioFrameSerializer should terminate the call via API."
+            )
         except Exception as e:
             log.error(f"Error in end_call: {e}")
-        return "Call ended successfully."
+            print(f"DEBUG Error in end_call: {e}", file=sys.stderr)
+
+        return "Call ended."
 
     start_func = lambda params: None  # Helper for list
 
@@ -412,6 +383,13 @@ Be brief (1-2 sentences). Be helpful. USE YOUR TOOLS!""",
 
 async def bot(websocket, stream_sid, call_sid):
     try:
+        serializer = TwilioFrameSerializer(
+            stream_sid=stream_sid,
+            call_sid=call_sid,
+            account_sid=os.getenv("TWILIO_ACCOUNT_SID"),
+            auth_token=os.getenv("TWILIO_AUTH_TOKEN"),
+        )
+
         # Initialize Transport
         transport = FastAPIWebsocketTransport(
             websocket=websocket,
@@ -419,12 +397,7 @@ async def bot(websocket, stream_sid, call_sid):
                 audio_in_enabled=True,
                 audio_out_enabled=True,
                 add_wav_header=False,
-                serializer=TwilioFrameSerializer(
-                    stream_sid=stream_sid,
-                    call_sid=call_sid,
-                    account_sid=os.getenv("TWILIO_ACCOUNT_SID"),
-                    auth_token=os.getenv("TWILIO_AUTH_TOKEN"),
-                ),
+                serializer=serializer,
             ),
         )
 

@@ -3,11 +3,16 @@ import os
 import sys
 from datetime import datetime
 from dotenv import load_dotenv
-from core.db.database import get_database, connect_to_mongo
 
-# Load environment variables
-sys.path.append(os.getcwd())
-load_dotenv(".env")
+# Add backend root to path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+backend_root = os.path.dirname(current_dir)
+sys.path.append(backend_root)
+
+# Load env from backend root
+load_dotenv(os.path.join(backend_root, ".env"))
+
+from core.db.database import get_database, connect_to_mongo
 
 
 async def show_logs():

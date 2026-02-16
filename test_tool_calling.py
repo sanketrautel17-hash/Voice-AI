@@ -18,7 +18,7 @@ print()
 
 async def test_tools():
     from pipecat.services.groq import GroqLLMService
-    from pipecat.processors.frame_processor import FunctionCallParams
+    from pipecat.services.llm_service import FunctionCallParams
     from pipecat.frames.frames import FunctionCallResultFrame
 
     # Create LLM

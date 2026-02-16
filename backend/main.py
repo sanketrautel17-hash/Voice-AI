@@ -18,7 +18,9 @@ app = FastAPI()
 async def startup_db_client():
     try:
         from core.db.database import connect_to_mongo
+        from commons.log_setup import setup_loguru
 
+        setup_loguru()
         await connect_to_mongo()
         log.info("Application startup complete")
     except Exception as e:
