@@ -2,20 +2,12 @@ import os
 import sys
 import asyncio
 from datetime import datetime
-import json
-from commons.logger import logger
-import logging
-
-# FORCE LOGGING TO STDERR FOR DEBUGGING
-logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
 from dotenv import load_dotenv
 
-log = logger(__name__)
-# Ensure env vars are loaded
-load_dotenv()
+from commons.logger import logger
+from core.db.database import get_database
 
-from groq import AsyncGroq
-
+# Pipecat imports
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -23,12 +15,11 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.frames.frames import TextFrame, EndFrame
+from pipecat.frames.frames import TextFrame
 from pipecat.serializers.twilio import TwilioFrameSerializer
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.deepgram.tts import DeepgramTTSService
@@ -40,12 +31,14 @@ from pipecat.transports.websocket.fastapi import (
 from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-from core.db.database import get_database
+# Core imports (Refactored)
+from core.prompts.system import SYSTEM_PROMPT
+from core.processors.frame_processors import GoodbyeDetector
+from core.tools.manager import ToolManager
+from core.services.analytics import analyze_call_transcript
 
-from core.rag.knowledge_base import kb
-from core.tools.web_search import web_searchER
-
-from pipecat.services.llm_service import FunctionCallParams
+log = logger(__name__)
+load_dotenv()
 
 
 async def run_bot(transport, stream_sid, call_sid):
@@ -53,71 +46,17 @@ async def run_bot(transport, stream_sid, call_sid):
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
     tts = DeepgramTTSService(api_key=os.getenv("DEEPGRAM_API_KEY"))
 
+    # Try GPT-OSS 120B - recommended for function calling
     llm = GroqLLMService(
         api_key=os.getenv("GROQ_API_KEY"),
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",  # Groq's recommended model for tool use
     )
 
     # 2. Context (Memory)
     messages = [
         {
             "role": "system",
-            "content": """You are FinBot, a helpful bank loan assistant.
-
-⚠️ YOU MUST USE TOOLS - Never answer without checking tools first!
-
-═══════════════════════════════
-🔧 TOOL USAGE (MANDATORY):
-═══════════════════════════════
-
-❗❗❗ MOST IMPORTANT - ENDING CALLS ❗❗❗
-3️⃣ When user says ANY of these words:
-   - goodbye, bye, thanks, thank you
-   - that's all, I'm done, no more questions
-   - not interested, no thanks
-   
-   → YOU MUST IMMEDIATELY call end_call()
-   → DO NOT just say goodbye
-   → DO NOT continue conversation  
-   → END THE CALL INSTANTLY by calling end_call()
-
-1️⃣ When user asks about RATES/LOANS:
-   → ALWAYS call get_loan_information(query="user question here")
-   → If no info found, THEN call search_web(query="specific search")
-
-2️⃣ When user asks about RBI/MARKET rates:
-   → IMMEDIATELY call search_web(query="RBI home loan rate 2026")
-
-═══════════════════════════════
-📝 EXAMPLES:
-═══════════════════════════════
-
-User: "What's your home loan rate?"
-You: [CALL get_loan_information(query="home loan interest rate")]
-Then respond with the result.
-
-User: "What's the RBI rate?"
-You: [CALL search_web(query="current RBI home loan interest rate India 2026")]
-Then share the findings.
-
-User: "Thanks, goodbye!"
-You: [CALL end_call()]  ← MANDATORY! DO THIS!
-
-User: "That's all I needed"
-You: [CALL end_call()]  ← MANDATORY! DO THIS!
-
-User: "Not interested"
-You: [CALL end_call()]  ← MANDATORY! DO THIS!
-
-═══════════════════════════════
-⚡ REMEMBER:
-═══════════════════════════════
-- STEP 1: Use tool
-- STEP 2: Share result  
-- STEP 3: Ask if they need more help
-- On goodbye/thanks/bye: IMMEDIATELY CALL end_call()
-
-Be brief (1-2 sentences). Be helpful. USE YOUR TOOLS!""",
+            "content": SYSTEM_PROMPT,
         }
     ]
 
@@ -138,11 +77,19 @@ Be brief (1-2 sentences). Be helpful. USE YOUR TOOLS!""",
         ),
     )
 
-    # 4. Pipeline Structure
+    # 4. Initialize Components (Tools & Processors)
+    # Create GoodbyeDetector
+    goodbye_detector = GoodbyeDetector()
+
+    # Create ToolManager
+    tool_manager = ToolManager(task=None, call_sid=call_sid)
+
+    # 5. Pipeline Structure
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
+            goodbye_detector,  # Intercepts transcriptions
             user_aggregator,
             llm,
             tts,
@@ -151,7 +98,7 @@ Be brief (1-2 sentences). Be helpful. USE YOUR TOOLS!""",
         ]
     )
 
-    # 5. Task
+    # 6. Task
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
@@ -163,137 +110,68 @@ Be brief (1-2 sentences). Be helpful. USE YOUR TOOLS!""",
         ),
     )
 
-    # Tool Logging Helper
-    async def log_tool_usage(tool_name: str, query: str, result: str):
-        try:
-            log.info(f"EXECUTING TOOL: {tool_name} | Query: {query}")
-            db_instance = get_database()  # Use imported function
-            if db_instance is not None:
-                log_entry = {
-                    "call_sid": call_sid,
-                    "tool": tool_name,
-                    "query": query,
-                    "result": str(result),
-                    "timestamp": datetime.now(),
-                }
-                # Use insert_one correctly on the collection
-                await db_instance["tool_logs"].insert_one(log_entry)
-                log.info(f"TOOL RESULT LOGGED: {str(result)[:100]}...")
-            else:
-                log.warning("Database instance not available for logging tool usage")
-        except Exception as e:
-            log.error(f"Failed to log tool usage: {e}")
+    # Wired up dependencies
+    goodbye_detector.set_task(task)
+    tool_manager.task = task
 
-    # Tool Definitions (Defined here so they can access 'task')
-    async def get_loan_information(params: FunctionCallParams, query: str):
-        """
-        Search the bank's internal knowledge base for loan policies, interest rates, and documents.
-        Args:
-            query (str): The search query (e.g., "home loan interest rates").
-        """
-        log.info(f"get_loan_information called with query: {query}")
-        result = await asyncio.to_thread(kb.query, query)
-        await log_tool_usage("get_loan_information", query, result)
-        return result
+    # Register Tools with LLM
+    tools = [
+        tool_manager.get_loan_information,
+        tool_manager.search_web,
+        tool_manager.end_call,
+    ]
 
-    async def search_web(params: FunctionCallParams, query: str):
-        """
-        Search the public web for current market rates, competitor info, or general financial news.
-        Args:
-            query (str): The search query (e.g., "current prime rate").
-        """
-        log.info(f"search_web called with query: {query}")
-        result = await asyncio.to_thread(web_searchER.search, query)
-        await log_tool_usage("search_web", query, result)
-        return result
-
-    async def end_call(params: FunctionCallParams, **kwargs):
-        """
-        End the conversation and disconnect the call.
-        Use this when the user says goodbye or when the conversation has come to a natural conclusion.
-        """
-        print(
-            "DEBUG: end_call tool invoked! Queueing goodbye and hangup...",
-            file=sys.stderr,
-        )
-        log.info("end_call tool invoked. Sending goodbye and hanging up...")
-        if kwargs:
-            log.info(f"end_call received unexpected kwargs: {kwargs}")
-
-        await log_tool_usage("end_call", "N/A", "Call termination requested")
-        try:
-            # Send a goodbye message
-            await task.queue_frames(
-                [
-                    TextFrame(
-                        text="Thank you for your time. Have a great day! Goodbye."
-                    ),
-                ]
-            )
-
-            # Allow time for the goodbye message to be spoken.
-            await asyncio.sleep(1.5)
-
-            # Send EndFrame to trigger the serializer's auto_hang_up logic
-            await task.queue_frames([EndFrame()])
-            log.info(
-                "EndFrame queued. TwilioFrameSerializer should terminate the call via API."
-            )
-        except Exception as e:
-            log.error(f"Error in end_call: {e}")
-            print(f"DEBUG Error in end_call: {e}", file=sys.stderr)
-
-        return "Call ended."
-
-    start_func = lambda params: None  # Helper for list
-
-    tools = [get_loan_information, search_web, end_call]
-
-    # Register tools
-    log.info(f"Registering {len(tools)} tools: {[t.__name__ for t in tools]}")
+    log.info(f"🔧 Registering {len(tools)} tools with LLM...")
+    log.info("=" * 60)
     for tool in tools:
         llm.register_direct_function(tool)
-        log.info(f"✓ Registered: {tool.__name__}")
+        log.info(f"  ✓ Registered: {tool.__name__}")
+        log.info(f"    Docstring: {tool.__doc__[:100] if tool.__doc__ else 'None'}...")
+        # Log function signature
+        import inspect
 
-    log.info(f"LLM has {len(llm._functions)} functions registered")
+        sig = inspect.signature(tool)
+        log.info(f"    Signature: {tool.__name__}{sig}")
+    log.info("=" * 60)
 
     runner = PipelineRunner()
 
-    # 6. Lifecycle Handlers
+    # 7. Lifecycle Handlers
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         try:
-            log.info("Transport connected. Starting outbound call conversation...")
-            # Inject greeting with a delay to ensure audio path is ready
+            log.info("🔌 Transport connected. Starting call...")
             await asyncio.sleep(2.0)
             await task.queue_frames(
                 [
                     TextFrame(
-                        text="Please introduce yourself and start the conversation."
+                        text="Hello! I'm FinBot. How can I assist you with your loan inquiry today?"
                     )
                 ]
             )
         except Exception as e:
-            log.error(f"Error in on_client_connected: {e}")
+            log.error(f"❌ Error in on_client_connected: {e}")
 
     # --- DB: Save Call Start ---
     db = get_database()
-    await db["calls"].insert_one(
-        {
-            "call_sid": call_sid,
-            "stream_sid": stream_sid,
-            "status": "started",
-            "start_time": datetime.utcnow(),
-        }
-    )
+    if db is not None:
+        await db["calls"].insert_one(
+            {
+                "call_sid": call_sid,
+                "stream_sid": stream_sid,
+                "status": "started",
+                "start_time": datetime.utcnow(),
+            }
+        )
 
     try:
-        log.info(f"Running pipeline task for call_sid: {call_sid}")
+        log.info(f"▶️ Running pipeline task for call_sid: {call_sid}")
         await runner.run(task)
     except Exception as e:
-        log.error(f"Pipeline execution failed: {e}")
+        log.error(f"❌ Pipeline execution failed: {e}")
 
-    # --- DB: Save Call End & Transcript ---
+    # --- Post-Call Analysis ---
+    # Serialize history
     def serialize_frame_data(data):
         if isinstance(data, dict):
             return {k: serialize_frame_data(v) for k, v in data.items()}
@@ -312,73 +190,32 @@ Be brief (1-2 sentences). Be helpful. USE YOUR TOOLS!""",
 
     serializable_history = [serialize_frame_data(msg) for msg in context.messages]
 
-    # --- Post-Call Analysis ---
-    async def analyze_call(transcript_data):
-        try:
-            # Simple prompt for analysis
-            analysis_prompt = f"""
-            Analyze the following sales call transcript between an AI assistant and a user.
-            Determine if the user is interested in a loan.
-            
-            Transcript: {str(transcript_data)[:10000]}  # Truncate if too long
-            
-            Return a valid JSON object with these fields:
-            - is_interested: boolean (true/false)
-            - loan_type: string (e.g., "Home", "Personal", "Auto", or "None")
-            - lead_score: integer (1-10, where 10 is highly interested)
-            - summary: string (brief summary of the conversation)
-            - next_step: string (what should happen next?)
-            
-            Do not include any markdown formatting (like ```json). Just the JSON string.
-            """
+    log.info("📊 Analyzing call...")
+    analysis_result = await analyze_call_transcript(serializable_history)
+    log.info(f"Analysis result: {analysis_result}")
 
-            # Initialize AsyncGroq client
-            client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
-
-            completion = await client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": analysis_prompt}],
-                response_format={"type": "json_object"},
-            )
-
-            text = completion.choices[0].message.content
-
-            # Clean up response text to ensure it's valid JSON
-            text = text.strip()
-            if text.startswith("```json"):
-                text = text[7:-3]
-            elif text.startswith("```"):
-                text = text[3:-3]
-
-            return json.loads(text)
-        except Exception as e:
-            log.error(f"Failed to analyze call: {e}")
-            return {"error": str(e), "is_interested": False}
-
-    # Perform analysis
-    analysis_result = await analyze_call(serializable_history)
-
-    await db["calls"].update_one(
-        {"call_sid": call_sid},
-        {
-            "$set": {
-                "status": "completed",
-                "end_time": datetime.utcnow(),
-                "transcript": serializable_history,
-                "analysis": analysis_result,
-            }
-        },
-    )
-
-    # Save to loan_interests collection as per plan
-    if analysis_result.get("is_interested"):
-        await db["loan_interests"].insert_one(
+    if db is not None:
+        await db["calls"].update_one(
+            {"call_sid": call_sid},
             {
-                "call_sid": call_sid,
-                "analysis": analysis_result,
-                "timestamp": datetime.utcnow(),
-            }
+                "$set": {
+                    "status": "completed",
+                    "end_time": datetime.utcnow(),
+                    "transcript": serializable_history,
+                    "analysis": analysis_result,
+                }
+            },
         )
+
+        if analysis_result.get("is_interested"):
+            log.info("💰 User showed interest - saving to loan_interests collection")
+            await db["loan_interests"].insert_one(
+                {
+                    "call_sid": call_sid,
+                    "analysis": analysis_result,
+                    "timestamp": datetime.utcnow(),
+                }
+            )
 
 
 async def bot(websocket, stream_sid, call_sid):
@@ -390,7 +227,6 @@ async def bot(websocket, stream_sid, call_sid):
             auth_token=os.getenv("TWILIO_AUTH_TOKEN"),
         )
 
-        # Initialize Transport
         transport = FastAPIWebsocketTransport(
             websocket=websocket,
             params=FastAPIWebsocketParams(
@@ -403,4 +239,4 @@ async def bot(websocket, stream_sid, call_sid):
 
         await run_bot(transport, stream_sid, call_sid)
     except Exception as e:
-        log.error(f"Error in bot function: {e}")
+        log.error(f"❌ Error in bot function: {e}")

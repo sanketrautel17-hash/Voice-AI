@@ -50,7 +50,7 @@ def config_logger(logger: logging.Logger):
     # Console Handler (Shared)
     if "console" not in _handlers:
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.DEBUG)
+        console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(formatter)
         _handlers["console"] = console_handler
 
