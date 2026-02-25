@@ -27,6 +27,6 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: true
-          # IMPORTANT: Change "yourusername" to your actual Docker Hub username!
-          tags: sanketrautel45/voice_ai:latest 
+          tags: sanketrautel45/voice_ai:latest
