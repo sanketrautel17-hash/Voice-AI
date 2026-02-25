@@ -1,0 +1,37 @@
+# Core API Framework
+fastapi
+uvicorn
+websockets
+python-dotenv
+
+# Voice AI Pipeline
+pipecat-ai[deepgram,twilio]
+
+# Database (MongoDB for call storage only)
+motor
+
+# LLM & AI
+groq
+openai
+
+# LangChain Core
+langchain
+langchain-community
+
+# RAG System (Local)
+langchain-huggingface
+langchain-chroma
+chromadb
+sentence-transformers
+
+# Document Processing
+pypdf
+llama-parse
+
+# Twilio
+twilio
+
+# Web Search
+duckduckgo-search
+tavily-python
+python-multipart
