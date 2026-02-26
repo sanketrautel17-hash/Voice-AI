@@ -73,7 +73,3 @@ This project follows modern DevOps practices. A dedicated GitHub Actions workflo
 
 - **Docker Image Repository**: [`sanketrautel45/voice_ai:latest`](https://hub.docker.com/r/sanketrautel45/voice_ai)
 - **Workflow configuration**: Located in `.github/workflows/publish.yml`
-
-## 📄 License
-
-This project is licensed under the [MIT License](LICENSE).
