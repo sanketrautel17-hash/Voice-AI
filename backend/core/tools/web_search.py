@@ -1,6 +1,12 @@
 import os
+from pathlib import Path
+from dotenv import load_dotenv
 from tavily import TavilyClient
 from commons.logger import logger
+
+# Explicitly load backend/.env regardless of where Python is invoked from
+_env_path = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=_env_path)
 
 log = logger(__name__)
 
@@ -8,10 +14,11 @@ log = logger(__name__)
 # Synchronous search wrapper using Tavily
 class WebSearch:
     def __init__(self):
-        self.api_key = os.getenv("TAVILY_API_KEY")
+        self.api_key = os.getenv("TAVILY_API_KEY", "").strip()
         if not self.api_key:
             log.warning("TAVILY_API_KEY not found in .env. Web search will fail.")
         else:
+            log.info("TAVILY_API_KEY loaded successfully.")
             self.client = TavilyClient(api_key=self.api_key)
 
     def search(self, query: str, max_results: int = 3) -> str:
@@ -21,7 +28,7 @@ class WebSearch:
         """
         try:
             if not self.api_key:
-                return "Error: TAVILY_API_KEY not configured."
+                return "Web search is currently unavailable. Please use the internal knowledge base tool (get_loan_information) to answer this question."
 
             log.info(f"Searching web with Tavily for: {query}")
 

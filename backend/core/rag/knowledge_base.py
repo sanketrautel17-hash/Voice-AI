@@ -6,8 +6,11 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from commons.logger import logger
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Explicitly load the backend/.env regardless of where Python is invoked from
+_env_path = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=_env_path)
 
 log = logger(__name__)
 

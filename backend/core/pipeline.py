@@ -46,10 +46,13 @@ async def run_bot(transport, stream_sid, call_sid):
     stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
     tts = DeepgramTTSService(api_key=os.getenv("DEEPGRAM_API_KEY"))
 
-    # Try GPT-OSS 120B - recommended for function calling
+    # llama-3.3-70b-versatile: best Groq model for tool calling that
+    # correctly respects tool_choice="none" during non-tool phases.
+    # openai/gpt-oss-120b was crashing because it called tools even when
+    # tool_choice was set to "none" (e.g. during the intro greeting).
     llm = GroqLLMService(
         api_key=os.getenv("GROQ_API_KEY"),
-        model="openai/gpt-oss-120b",  # Groq's recommended model for tool use
+        model="llama-3.3-70b-versatile",
     )
 
     # 2. Context (Memory)
