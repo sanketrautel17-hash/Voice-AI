@@ -142,6 +142,34 @@ function App() {
     ? currentCallData
     : allCalls.find(c => c.id === selectedCallId) ?? null;
 
+  // ── Lead Form State ──────────────────────────────────────────────────────
+  const [formData, setFormData] = useState({
+    firstName: '',
+    lastName: '',
+    phone: '',
+    email: ''
+  });
+  const [formStatus, setFormStatus] = useState('idle'); // idle, submitting, success, error
+
+  const handleFormSubmit = async () => {
+    if (!formData.firstName || !formData.lastName || !formData.phone || !formData.email) {
+      setFormStatus('error');
+      setTimeout(() => setFormStatus('idle'), 3000);
+      return;
+    }
+    setFormStatus('submitting');
+    try {
+      await axios.post(`${API_URL}/submit-lead`, formData);
+      setFormStatus('success');
+      setFormData({ firstName: '', lastName: '', phone: '', email: '' });
+      setTimeout(() => setFormStatus('idle'), 3000);
+    } catch (err) {
+      console.error('Failed to submit form', err);
+      setFormStatus('error');
+      setTimeout(() => setFormStatus('idle'), 3000);
+    }
+  };
+
   // ── Fetch all calls ────────────────────────────────────────────────────
   const fetchAllCalls = useCallback(async () => {
     try {
@@ -287,6 +315,62 @@ function App() {
 
         {/* ── Left: Controls + Call History ── */}
         <div className="controls-panel">
+
+          {/* Lead Details Form */}
+          <div className="lead-form-section">
+            <p className="panel-label">Lead Information</p>
+            <div className="form-group">
+              <input
+                type="text"
+                placeholder="First Name"
+                className="input-field"
+                style={{ paddingLeft: '1rem' }}
+                value={formData.firstName}
+                onChange={(e) => setFormData({ ...formData, firstName: e.target.value })}
+              />
+              <input
+                type="text"
+                placeholder="Last Name"
+                className="input-field"
+                style={{ paddingLeft: '1rem' }}
+                value={formData.lastName}
+                onChange={(e) => setFormData({ ...formData, lastName: e.target.value })}
+              />
+              <input
+                type="tel"
+                placeholder="Phone No."
+                className="input-field"
+                style={{ paddingLeft: '1rem' }}
+                value={formData.phone}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+              />
+              <input
+                type="email"
+                placeholder="Email ID"
+                className="input-field"
+                style={{ paddingLeft: '1rem' }}
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              />
+              <button 
+                className="btn-primary" 
+                onClick={handleFormSubmit}
+                disabled={formStatus === 'submitting'}
+                style={formStatus === 'success' ? { background: 'var(--success)', boxShadow: 'none' } : {}}
+              >
+                {formStatus === 'submitting' ? <Loader2 size={16} className="spin-anim" /> : 
+                 formStatus === 'success' ? <><Check size={16} /> Submitted</> : 
+                 'Submit Lead'}
+              </button>
+              {formStatus === 'error' && (
+                <p style={{ color: 'var(--error)', fontSize: '0.8rem', margin: 0, textAlign: 'center' }}>
+                  Failed to submit. Please check fields.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="section-divider" />
 
           {/* New Call Section */}
           <div>

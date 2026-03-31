@@ -12,7 +12,7 @@ log = logger(__name__)
 from dotenv import load_dotenv
 
 from core.pipeline import bot
-from core.apis.schemas.call_schemas import DialoutResponse, DialoutRequest
+from core.apis.schemas.call_schemas import DialoutResponse, DialoutRequest, LeadSubmission
 from core.db.database import get_database
 
 load_dotenv()
@@ -160,6 +160,21 @@ async def get_calls():
     calls_cursor = db["calls"].find().sort("start_time", -1).limit(50)
     calls = await calls_cursor.to_list(length=50)
     return [serialize_mongo_doc(call) for call in calls]
+
+
+@router.post("/submit-lead")
+async def submit_lead(lead: LeadSubmission):
+    """
+    Handle lead submission form data.
+    """
+    try:
+        data = lead.dict()
+        db = get_database()
+        result = await db["leads"].insert_one(data)
+        return {"status": "success", "message": "Lead submitted successfully", "id": str(result.inserted_id)}
+    except Exception as e:
+        log.error(f"Failed to submit lead: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save lead")
 
 
 # Alias for backward compatibility
